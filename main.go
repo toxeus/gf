@@ -1,25 +1,68 @@
 package main
 
 import (
+	"html/template"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
-func upload(w http.ResponseWriter, req *http.Request) {
+var tmpl = template.Must(template.New("list").Parse(
+	`<!DOCTYPE html>
+		<html>
+		<head>
+			<title>Share!</title>
+		</head>
+		<body>
+			<form enctype="multipart/form-data" action="/" method="post">
+				<input type="file" name="fileupload" onchange="submit();">
+			</form>
+			<ul>
+				{{- range .}}
+				<li><a href="{{.}}">{{.}}</a></li>
+				{{- end}}
+			</ul>
+		</body>
+		</html>`))
+
+func share(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodGet {
-		io.WriteString(w,
-			`<html>
-			<head>
-				<title>Upload!</title>
-			</head>
-			<body>
-				<form enctype="multipart/form-data" action="/" method="post">
-					<input type="file" name="fileupload" onchange="submit();">
-				</form>
-			</body>
-			</html>`)
+		if req.RequestURI != "/" {
+			fileName := req.RequestURI[1:]
+			f, err := os.Open(fileName)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			defer f.Close()
+			if _, err := io.Copy(w, f); err != nil {
+				log.Println(err)
+				return
+			}
+			w.Header().Add("Content-Type", "application/octet-stream")
+			log.Printf("Sent %s to %s\n", fileName, req.Host)
+		}
+		files := []string{}
+		walkFunc := func(path string, info os.FileInfo, err error) error {
+			if path == "." {
+				return nil
+			}
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			files = append(files, info.Name())
+			return nil
+		}
+		if err := filepath.Walk(".", walkFunc); err != nil {
+			log.Println(err)
+			return
+		}
+		if err := tmpl.Execute(w, files); err != nil {
+			log.Println(err)
+			return
+		}
 	} else if req.Method == http.MethodPost {
 		file, handler, err := req.FormFile("fileupload")
 		if err != nil {
@@ -40,7 +83,7 @@ func upload(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	http.HandleFunc("/", upload)
+	http.HandleFunc("/", share)
 	log.Println("Receiving files to current directory...")
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }
